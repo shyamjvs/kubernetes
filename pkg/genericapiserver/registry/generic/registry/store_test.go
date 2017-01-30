@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -204,7 +205,7 @@ func TestStoreList(t *testing.T) {
 		}
 
 		// DeepDerivative e,a is needed here b/c the storage layer sets ResourceVersion
-		if e, a := item.out, list; !api.Semantic.DeepDerivative(e, a) {
+		if e, a := item.out, list; !apiequality.Semantic.DeepDerivative(e, a) {
 			t.Errorf("%v: Expected %#v, got %#v", name, e, a)
 		}
 		destroyFunc()
@@ -1251,6 +1252,7 @@ func newTestGenericStoreRegistry(t *testing.T, hasCacheEnabled bool) (factory.De
 			CacheCapacity:  10,
 			Storage:        s,
 			Versioner:      etcdstorage.APIObjectVersioner{},
+			Copier:         api.Scheme,
 			Type:           &api.Pod{},
 			ResourcePrefix: podPrefix,
 			KeyFunc:        func(obj runtime.Object) (string, error) { return storage.NoNamespaceKeyFunc(podPrefix, obj) },
@@ -1268,6 +1270,7 @@ func newTestGenericStoreRegistry(t *testing.T, hasCacheEnabled bool) (factory.De
 	}
 
 	return destroyFunc, &Store{
+		Copier:            api.Scheme,
 		NewFunc:           func() runtime.Object { return &api.Pod{} },
 		NewListFunc:       func() runtime.Object { return &api.PodList{} },
 		QualifiedResource: api.Resource("pods"),

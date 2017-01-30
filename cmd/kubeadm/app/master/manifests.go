@@ -24,11 +24,11 @@ import (
 	"path"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/images"
-	"k8s.io/kubernetes/pkg/api/resource"
 	api "k8s.io/kubernetes/pkg/api/v1"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/util/intstr"
@@ -360,7 +360,7 @@ func getAPIServerCommand(cfg *kubeadmapi.MasterConfiguration, selfHosted bool) [
 			command = append(command, "--kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname")
 		}
 
-		// This is a critical "bugfix". Any version above this is vulnarable unless a RBAC/ABAC-authorizer is provided (which kubeadm doesn't for the time being)
+		// This is a critical "bugfix". Any version above this is vulnerable unless a RBAC/ABAC-authorizer is provided (which kubeadm doesn't for the time being)
 		if err == nil && k8sVersion.GTE(anonAuthDisableAPIServerMinVersion) {
 			command = append(command, "--anonymous-auth=false")
 		}
