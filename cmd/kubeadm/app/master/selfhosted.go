@@ -24,12 +24,20 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
+	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/images"
 	"k8s.io/kubernetes/pkg/api/v1"
 	ext "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+)
+
+var (
+	// maximum unavailable and surge instances per self-hosted component deployment
+	maxUnavailable = intstr.FromInt(0)
+	maxSurge       = intstr.FromInt(1)
 )
 
 func CreateSelfHostedControlPlane(cfg *kubeadmapi.MasterConfiguration, client *clientset.Clientset) error {
@@ -72,7 +80,7 @@ func launchSelfHostedAPIServer(cfg *kubeadmapi.MasterConfiguration, client *clie
 		return fmt.Errorf("failed to create self-hosted %q daemon set [%v]", kubeAPIServer, err)
 	}
 
-	wait.PollInfinite(apiCallRetryInterval, func() (bool, error) {
+	wait.PollInfinite(kubeadmconstants.APICallRetryInterval, func() (bool, error) {
 		// TODO: This might be pointless, checking the pods is probably enough.
 		// It does however get us a count of how many there should be which may be useful
 		// with HA.
@@ -150,7 +158,7 @@ func launchSelfHostedScheduler(cfg *kubeadmapi.MasterConfiguration, client *clie
 // waitForPodsWithLabel will lookup pods with the given label and wait until they are all
 // reporting status as running.
 func waitForPodsWithLabel(client *clientset.Clientset, appLabel string, mustBeRunning bool) {
-	wait.PollInfinite(apiCallRetryInterval, func() (bool, error) {
+	wait.PollInfinite(kubeadmconstants.APICallRetryInterval, func() (bool, error) {
 		// TODO: Do we need a stronger label link than this?
 		listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("k8s-app=%s", appLabel)}
 		apiPods, err := client.Pods(metav1.NamespaceSystem).List(listOpts)
@@ -234,6 +242,13 @@ func getControllerManagerDeployment(cfg *kubeadmapi.MasterConfiguration, volumes
 		},
 		Spec: ext.DeploymentSpec{
 			// TODO bootkube uses 2 replicas
+			Strategy: ext.DeploymentStrategy{
+				Type: ext.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &ext.RollingUpdateDeployment{
+					MaxUnavailable: &maxUnavailable,
+					MaxSurge:       &maxSurge,
+				},
+			},
 			Template: v1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -281,6 +296,13 @@ func getSchedulerDeployment(cfg *kubeadmapi.MasterConfiguration) ext.Deployment 
 		},
 		Spec: ext.DeploymentSpec{
 			// TODO bootkube uses 2 replicas
+			Strategy: ext.DeploymentStrategy{
+				Type: ext.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &ext.RollingUpdateDeployment{
+					MaxUnavailable: &maxUnavailable,
+					MaxSurge:       &maxSurge,
+				},
+			},
 			Template: v1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{

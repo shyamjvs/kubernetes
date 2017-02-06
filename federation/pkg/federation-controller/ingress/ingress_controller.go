@@ -27,7 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
 	federationapi "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	federationclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset"
@@ -38,7 +40,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/v1"
 	extensionsv1beta1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
 
 	"github.com/golang/glog"
@@ -119,7 +120,7 @@ func NewIngressController(client federationclientset.Interface) *IngressControll
 	glog.V(4).Infof("->NewIngressController V(4)")
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(client))
-	recorder := broadcaster.NewRecorder(v1.EventSource{Component: "federated-ingress-controller"})
+	recorder := broadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: "federated-ingress-controller"})
 	ic := &IngressController{
 		federatedApiClient:    client,
 		ingressReviewDelay:    time.Second * 10,
@@ -338,14 +339,14 @@ func (ic *IngressController) removeFinalizerFunc(obj pkgruntime.Object, finalize
 	return ingress, nil
 }
 
-// Adds the given finalizer to the given objects ObjectMeta.
+// Adds the given finalizers to the given objects ObjectMeta.
 // Assumes that the given object is a ingress.
-func (ic *IngressController) addFinalizerFunc(obj pkgruntime.Object, finalizer string) (pkgruntime.Object, error) {
+func (ic *IngressController) addFinalizerFunc(obj pkgruntime.Object, finalizers []string) (pkgruntime.Object, error) {
 	ingress := obj.(*extensionsv1beta1.Ingress)
-	ingress.ObjectMeta.Finalizers = append(ingress.ObjectMeta.Finalizers, finalizer)
+	ingress.ObjectMeta.Finalizers = append(ingress.ObjectMeta.Finalizers, finalizers...)
 	ingress, err := ic.federatedApiClient.Extensions().Ingresses(ingress.Namespace).Update(ingress)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add finalizer %s to ingress %s: %v", finalizer, ingress.Name, err)
+		return nil, fmt.Errorf("failed to add finalizers %v to ingress %s: %v", finalizers, ingress.Name, err)
 	}
 	return ingress, nil
 }

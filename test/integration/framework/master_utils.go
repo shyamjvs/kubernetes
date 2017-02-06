@@ -39,8 +39,10 @@ import (
 	authauthorizer "k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	authorizerunion "k8s.io/apiserver/pkg/authorization/union"
+	genericapiserver "k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/v1"
@@ -55,11 +57,9 @@ import (
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	coreclient "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/core/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
 	replicationcontroller "k8s.io/kubernetes/pkg/controller/replication"
 	"k8s.io/kubernetes/pkg/generated/openapi"
-	genericapiserver "k8s.io/kubernetes/pkg/genericapiserver/server"
 	"k8s.io/kubernetes/pkg/kubectl"
 	kubeletclient "k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/master"
@@ -183,7 +183,7 @@ func startMasterOrDie(masterConfig *master.Config, incomingServer *httptest.Serv
 		masterConfig = NewMasterConfig()
 		masterConfig.GenericConfig.EnableProfiling = true
 		masterConfig.GenericConfig.EnableMetrics = true
-		masterConfig.GenericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(openapi.OpenAPIDefinitions)
+		masterConfig.GenericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(openapi.GetOpenAPIDefinitions, api.Scheme)
 		masterConfig.GenericConfig.OpenAPIConfig.Info = &spec.Info{
 			InfoProps: spec.InfoProps{
 				Title:   "Kubernetes",
@@ -195,7 +195,7 @@ func startMasterOrDie(masterConfig *master.Config, incomingServer *httptest.Serv
 				Description: "Default Response.",
 			},
 		}
-		masterConfig.GenericConfig.OpenAPIConfig.Definitions = openapi.OpenAPIDefinitions
+		masterConfig.GenericConfig.OpenAPIConfig.GetDefinitions = openapi.GetOpenAPIDefinitions
 		masterConfig.GenericConfig.SwaggerConfig = genericapiserver.DefaultSwaggerConfig()
 	}
 
@@ -311,12 +311,13 @@ func NewMasterConfig() *master.Config {
 		// prefix code, so please don't change without ensuring
 		// sufficient coverage in other ways.
 		Prefix: uuid.New(),
+		Copier: api.Scheme,
 	}
 
 	info, _ := runtime.SerializerInfoForMediaType(api.Codecs.SupportedMediaTypes(), runtime.ContentTypeJSON)
 	ns := NewSingleContentTypeSerializer(api.Scheme, info)
 
-	storageFactory := genericapiserver.NewDefaultStorageFactory(config, runtime.ContentTypeJSON, ns, genericapiserver.NewDefaultResourceEncodingConfig(), master.DefaultAPIResourceConfigSource())
+	storageFactory := genericapiserver.NewDefaultStorageFactory(config, runtime.ContentTypeJSON, ns, genericapiserver.NewDefaultResourceEncodingConfig(api.Registry), master.DefaultAPIResourceConfigSource())
 	storageFactory.SetSerializer(
 		schema.GroupResource{Group: v1.GroupName, Resource: genericapiserver.AllResources},
 		"",
@@ -354,7 +355,7 @@ func NewMasterConfig() *master.Config {
 		"",
 		ns)
 
-	genericConfig := genericapiserver.NewConfig()
+	genericConfig := genericapiserver.NewConfig().WithSerializer(api.Codecs)
 	kubeVersion := version.Get()
 	genericConfig.Version = &kubeVersion
 	genericConfig.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()

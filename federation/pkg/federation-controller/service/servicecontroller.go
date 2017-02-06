@@ -32,7 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
 	cache "k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	v1beta1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	federationcache "k8s.io/kubernetes/federation/client/cache"
 	fedclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset"
@@ -44,9 +47,7 @@ import (
 	v1 "k8s.io/kubernetes/pkg/api/v1"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/client/legacylisters"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/util/workqueue"
 )
 
 const (
@@ -159,7 +160,7 @@ func New(federationClient fedclientset.Interface, dns dnsprovider.Interface,
 	broadcaster := record.NewBroadcaster()
 	// federationClient event is not supported yet
 	// broadcaster.StartRecordingToSink(&unversioned_core.EventSinkImpl{Interface: kubeClient.Core().Events("")})
-	recorder := broadcaster.NewRecorder(v1.EventSource{Component: UserAgentName})
+	recorder := broadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: UserAgentName})
 
 	s := &ServiceController{
 		dns:              dns,
@@ -344,14 +345,14 @@ func (s *ServiceController) removeFinalizerFunc(obj pkgruntime.Object, finalizer
 	return service, nil
 }
 
-// Adds the given finalizer to the given objects ObjectMeta.
+// Adds the given finalizers to the given objects ObjectMeta.
 // Assumes that the given object is a service.
-func (s *ServiceController) addFinalizerFunc(obj pkgruntime.Object, finalizer string) (pkgruntime.Object, error) {
+func (s *ServiceController) addFinalizerFunc(obj pkgruntime.Object, finalizers []string) (pkgruntime.Object, error) {
 	service := obj.(*v1.Service)
-	service.ObjectMeta.Finalizers = append(service.ObjectMeta.Finalizers, finalizer)
+	service.ObjectMeta.Finalizers = append(service.ObjectMeta.Finalizers, finalizers...)
 	service, err := s.federationClient.Core().Services(service.Namespace).Update(service)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add finalizer %s to service %s: %v", finalizer, service.Name, err)
+		return nil, fmt.Errorf("failed to add finalizers %v to service %s: %v", finalizers, service.Name, err)
 	}
 	return service, nil
 }
@@ -420,7 +421,7 @@ func (s *ServiceController) init() error {
 	}
 	zones, ok := s.dns.Zones()
 	if !ok {
-		return fmt.Errorf("the dns provider does not support zone enumeration, which is required for creating dns records.")
+		return fmt.Errorf("the dns provider does not support zone enumeration, which is required for creating dns records")
 	}
 	s.dnsZones = zones
 	matchingZones, err := getDnsZones(s.zoneName, s.zoneID, s.dnsZones)

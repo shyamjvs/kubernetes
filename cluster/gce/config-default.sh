@@ -58,7 +58,7 @@ fi
 # containervm. If you are updating the containervm version, update this
 # variable. Also please update corresponding image for node e2e at:
 # https://github.com/kubernetes/kubernetes/blob/master/test/e2e_node/jenkins/image-config.yaml
-CVM_VERSION=${CVM_VERSION:-container-vm-v20170117}
+CVM_VERSION=${CVM_VERSION:-container-vm-v20170201}
 GCI_VERSION=${KUBE_GCI_VERSION:-gci-dev-56-8977-0-0}
 MASTER_IMAGE=${KUBE_GCE_MASTER_IMAGE:-}
 MASTER_IMAGE_PROJECT=${KUBE_GCE_MASTER_PROJECT:-google-containers}
@@ -123,7 +123,7 @@ fi
 RUNTIME_CONFIG="${KUBE_RUNTIME_CONFIG:-}"
 
 # Optional: set feature gates
-FEATURE_GATES="${KUBE_FEATURE_GATES:-}"
+FEATURE_GATES="${KUBE_FEATURE_GATES:-ExperimentalCriticalPodAnnotation=true}"
 
 # Optional: Install cluster DNS.
 ENABLE_CLUSTER_DNS="${KUBE_ENABLE_CLUSTER_DNS:-true}"

@@ -27,22 +27,17 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/client/legacylisters"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
 	"k8s.io/kubernetes/pkg/util/node"
 	utilversion "k8s.io/kubernetes/pkg/util/version"
 
 	"github.com/golang/glog"
-)
-
-const (
-	// Number of Nodes that needs to be in the cluster for it to be treated as "large"
-	LargeClusterThreshold = 20
 )
 
 // deletePods will delete all pods from master running on given node, and return true

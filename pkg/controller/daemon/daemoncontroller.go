@@ -28,19 +28,20 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/v1"
 	extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
-	v1core "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/core/v1"
 	unversionedextensions "k8s.io/kubernetes/pkg/client/clientset_generated/clientset/typed/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/client/legacylisters"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/informers"
 	"k8s.io/kubernetes/pkg/util/metrics"
-	"k8s.io/kubernetes/pkg/util/workqueue"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/algorithm/predicates"
 	"k8s.io/kubernetes/plugin/pkg/scheduler/schedulercache"
 
@@ -51,12 +52,19 @@ const (
 	// Daemon sets will periodically check that their daemon pods are running as expected.
 	FullDaemonSetResyncPeriod = 30 * time.Second // TODO: Figure out if this time seems reasonable.
 
-	// Realistic value of the burstReplica field for the replication manager based off
-	// performance requirements for kubernetes 1.0.
-	BurstReplicas = 500
+	// The value of 250 is chosen b/c values that are too high can cause registry DoS issues
+	BurstReplicas = 250
 
 	// If sending a status upate to API server fails, we retry a finite number of times.
 	StatusUpdateRetries = 1
+
+	// Reasons for DaemonSet events
+	// SelectingAllReason is added to an event when a DaemonSet selects all Pods.
+	SelectingAllReason = "SelectingAll"
+	// FailedPlacementReason is added to an event when a DaemonSet can't schedule a Pod to a specified node.
+	FailedPlacementReason = "FailedPlacement"
+	// FailedDaemonPodReason is added to an event when the status of a Pod of a DaemonSet is 'Failed'.
+	FailedDaemonPodReason = "FailedDaemonPod"
 )
 
 // DaemonSetsController is responsible for synchronizing DaemonSet objects stored
@@ -100,17 +108,17 @@ func NewDaemonSetsController(daemonSetInformer informers.DaemonSetInformer, podI
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartLogging(glog.Infof)
 	// TODO: remove the wrapper when every clients have moved to use the clientset.
-	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeClient.Core().Events("")})
+	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: v1core.New(kubeClient.Core().RESTClient()).Events("")})
 
 	if kubeClient != nil && kubeClient.Core().RESTClient().GetRateLimiter() != nil {
 		metrics.RegisterMetricAndTrackRateLimiterUsage("daemon_controller", kubeClient.Core().RESTClient().GetRateLimiter())
 	}
 	dsc := &DaemonSetsController{
 		kubeClient:    kubeClient,
-		eventRecorder: eventBroadcaster.NewRecorder(v1.EventSource{Component: "daemonset-controller"}),
+		eventRecorder: eventBroadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: "daemonset-controller"}),
 		podControl: controller.RealPodControl{
 			KubeClient: kubeClient,
-			Recorder:   eventBroadcaster.NewRecorder(v1.EventSource{Component: "daemon-set"}),
+			Recorder:   eventBroadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: "daemon-set"}),
 		},
 		burstReplicas: BurstReplicas,
 		expectations:  controller.NewControllerExpectations(),
@@ -461,26 +469,49 @@ func (dsc *DaemonSetsController) manage(ds *extensions.DaemonSet) error {
 		return fmt.Errorf("couldn't get list of nodes when syncing daemon set %#v: %v", ds, err)
 	}
 	var nodesNeedingDaemonPods, podsToDelete []string
+	var failedPodsObserved int
 	for _, node := range nodeList.Items {
 		_, shouldSchedule, shouldContinueRunning, err := dsc.nodeShouldRunDaemonPod(&node, ds)
 		if err != nil {
 			continue
 		}
 
-		daemonPods, isRunning := nodeToDaemonPods[node.Name]
+		daemonPods, exists := nodeToDaemonPods[node.Name]
 
 		switch {
-		case shouldSchedule && !isRunning:
+		case shouldSchedule && !exists:
 			// If daemon pod is supposed to be running on node, but isn't, create daemon pod.
 			nodesNeedingDaemonPods = append(nodesNeedingDaemonPods, node.Name)
-		case shouldContinueRunning && len(daemonPods) > 1:
-			// If daemon pod is supposed to be running on node, but more than 1 daemon pod is running, delete the excess daemon pods.
-			// Sort the daemon pods by creation time, so the the oldest is preserved.
-			sort.Sort(podByCreationTimestamp(daemonPods))
-			for i := 1; i < len(daemonPods); i++ {
-				podsToDelete = append(podsToDelete, daemonPods[i].Name)
+		case shouldContinueRunning:
+			// If a daemon pod failed, delete it
+			// If there's no daemon pods left on this node, we will create it in the next sync loop
+			var daemonPodsRunning []*v1.Pod
+			for i := range daemonPods {
+				pod := daemonPods[i]
+				// Skip terminating pods. We won't delete them again or count them as running daemon pods.
+				if pod.DeletionTimestamp != nil {
+					continue
+				}
+				if pod.Status.Phase == v1.PodFailed {
+					msg := fmt.Sprintf("Found failed daemon pod %s/%s on node %s, will try to kill it", pod.Namespace, node.Name, pod.Name)
+					glog.V(2).Infof(msg)
+					// Emit an event so that it's discoverable to users.
+					dsc.eventRecorder.Eventf(ds, v1.EventTypeWarning, FailedDaemonPodReason, msg)
+					podsToDelete = append(podsToDelete, pod.Name)
+					failedPodsObserved++
+				} else {
+					daemonPodsRunning = append(daemonPodsRunning, pod)
+				}
 			}
-		case !shouldContinueRunning && isRunning:
+			// If daemon pod is supposed to be running on node, but more than 1 daemon pod is running, delete the excess daemon pods.
+			// Sort the daemon pods by creation time, so the oldest is preserved.
+			if len(daemonPodsRunning) > 1 {
+				sort.Sort(podByCreationTimestamp(daemonPodsRunning))
+				for i := 1; i < len(daemonPodsRunning); i++ {
+					podsToDelete = append(podsToDelete, daemonPods[i].Name)
+				}
+			}
+		case !shouldContinueRunning && exists:
 			// If daemon pod isn't supposed to run on node, but it is, delete all daemon pods on node.
 			for i := range daemonPods {
 				podsToDelete = append(podsToDelete, daemonPods[i].Name)
@@ -546,6 +577,10 @@ func (dsc *DaemonSetsController) manage(ds *extensions.DaemonSet) error {
 	close(errCh)
 	for err := range errCh {
 		errors = append(errors, err)
+	}
+	// Throw an error when the daemon pods fail, to use ratelimiter to prevent kill-recreate hot loop
+	if failedPodsObserved > 0 {
+		errors = append(errors, fmt.Errorf("deleted %d failed pods of DaemonSet %s/%s", failedPodsObserved, ds.Namespace, ds.Name))
 	}
 	return utilerrors.NewAggregate(errors)
 }
@@ -654,7 +689,7 @@ func (dsc *DaemonSetsController) syncDaemonSet(key string) error {
 
 	everything := metav1.LabelSelector{}
 	if reflect.DeepEqual(ds.Spec.Selector, &everything) {
-		dsc.eventRecorder.Eventf(ds, v1.EventTypeWarning, "SelectingAll", "This daemon set is selecting all pods. A non-empty selector is required.")
+		dsc.eventRecorder.Eventf(ds, v1.EventTypeWarning, SelectingAllReason, "This daemon set is selecting all pods. A non-empty selector is required.")
 		return nil
 	}
 
@@ -740,7 +775,7 @@ func (dsc *DaemonSetsController) nodeShouldRunDaemonPod(node *v1.Node, ds *exten
 		glog.V(4).Infof("GeneralPredicates failed on ds '%s/%s' for reason: %v", ds.ObjectMeta.Namespace, ds.ObjectMeta.Name, r.GetReason())
 		switch reason := r.(type) {
 		case *predicates.InsufficientResourceError:
-			dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, "FailedPlacement", "failed to place pod on %q: %s", node.ObjectMeta.Name, reason.Error())
+			dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, FailedPlacementReason, "failed to place pod on %q: %s", node.ObjectMeta.Name, reason.Error())
 			shouldSchedule = false
 		case *predicates.PredicateFailureError:
 			var emitEvent bool
@@ -774,12 +809,12 @@ func (dsc *DaemonSetsController) nodeShouldRunDaemonPod(node *v1.Node, ds *exten
 				predicates.ErrTaintsTolerationsNotMatch:
 				return false, false, false, fmt.Errorf("unexpected reason: GeneralPredicates should not return reason %s", reason.GetReason())
 			default:
-				glog.V(4).Infof("unknownd predicate failure reason: %s", reason.GetReason())
+				glog.V(4).Infof("unknown predicate failure reason: %s", reason.GetReason())
 				wantToRun, shouldSchedule, shouldContinueRunning = false, false, false
 				emitEvent = true
 			}
 			if emitEvent {
-				dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, "FailedPlacement", "failed to place pod on %q: %s", node.ObjectMeta.Name, reason.GetReason())
+				dsc.eventRecorder.Eventf(ds, v1.EventTypeNormal, FailedPlacementReason, "failed to place pod on %q: %s", node.ObjectMeta.Name, reason.GetReason())
 			}
 		}
 	}

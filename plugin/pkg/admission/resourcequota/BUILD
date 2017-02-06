@@ -23,8 +23,6 @@ go_library(
         "//pkg/kubeapiserver/admission:go_default_library",
         "//pkg/quota:go_default_library",
         "//pkg/quota/install:go_default_library",
-        "//pkg/storage/etcd:go_default_library",
-        "//pkg/util/workqueue:go_default_library",
         "//pkg/util/workqueue/prometheus:go_default_library",
         "//vendor:github.com/golang/glog",
         "//vendor:github.com/hashicorp/golang-lru",
@@ -36,7 +34,9 @@ go_library(
         "//vendor:k8s.io/apimachinery/pkg/util/wait",
         "//vendor:k8s.io/apimachinery/pkg/watch",
         "//vendor:k8s.io/apiserver/pkg/admission",
+        "//vendor:k8s.io/apiserver/pkg/storage/etcd",
         "//vendor:k8s.io/client-go/tools/cache",
+        "//vendor:k8s.io/client-go/util/workqueue",
     ],
 )
 
@@ -47,12 +47,12 @@ go_test(
     tags = ["automanaged"],
     deps = [
         "//pkg/api:go_default_library",
-        "//pkg/api/resource:go_default_library",
         "//pkg/client/clientset_generated/internalclientset/fake:go_default_library",
         "//pkg/quota:go_default_library",
         "//pkg/quota/generic:go_default_library",
         "//pkg/quota/install:go_default_library",
         "//vendor:github.com/hashicorp/golang-lru",
+        "//vendor:k8s.io/apimachinery/pkg/api/resource",
         "//vendor:k8s.io/apimachinery/pkg/apis/meta/v1",
         "//vendor:k8s.io/apimachinery/pkg/runtime/schema",
         "//vendor:k8s.io/apimachinery/pkg/util/sets",

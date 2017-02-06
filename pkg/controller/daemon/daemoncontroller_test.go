@@ -20,13 +20,14 @@ import (
 	"fmt"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/storage/names"
 	core "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/v1"
 	extensions "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
@@ -138,11 +139,20 @@ func addPods(podStore cache.Store, nodeName string, label map[string]string, num
 	}
 }
 
+func addFailedPods(podStore cache.Store, nodeName string, label map[string]string, number int) {
+	for i := 0; i < number; i++ {
+		pod := newPod(fmt.Sprintf("%s-", nodeName), nodeName, label)
+		pod.Status = v1.PodStatus{Phase: v1.PodFailed}
+		podStore.Add(pod)
+	}
+}
+
 func newTestController(initialObjects ...runtime.Object) (*DaemonSetsController, *controller.FakePodControl, *fake.Clientset) {
 	clientset := fake.NewSimpleClientset(initialObjects...)
 	informerFactory := informers.NewSharedInformerFactory(clientset, nil, controller.NoResyncPeriodFunc())
 
 	manager := NewDaemonSetsController(informerFactory.DaemonSets(), informerFactory.Pods(), informerFactory.Nodes(), clientset, 0)
+	manager.eventRecorder = record.NewFakeRecorder(100)
 
 	manager.podStoreSynced = alwaysReady
 	manager.nodeStoreSynced = alwaysReady
@@ -253,7 +263,7 @@ func allocatableResources(memory, cpu string) v1.ResourceList {
 }
 
 // DaemonSets should not place onto nodes with insufficient free resource
-func TestInsufficentCapacityNodeDaemonDoesNotLaunchPod(t *testing.T) {
+func TestInsufficientCapacityNodeDaemonDoesNotLaunchPod(t *testing.T) {
 	podSpec := resourcePodSpec("too-much-mem", "75M", "75m")
 	manager, podControl, _ := newTestController()
 	node := newNode("too-much-mem", nil)
@@ -285,7 +295,7 @@ func TestInsufficentCapacityNodeDaemonDoesNotUnscheduleRunningPod(t *testing.T) 
 	syncAndValidateDaemonSets(t, manager, ds, podControl, 0, 0)
 }
 
-func TestSufficentCapacityWithTerminatedPodsDaemonLaunchesPod(t *testing.T) {
+func TestSufficientCapacityWithTerminatedPodsDaemonLaunchesPod(t *testing.T) {
 	podSpec := resourcePodSpec("too-much-mem", "75M", "75m")
 	manager, podControl, _ := newTestController()
 	node := newNode("too-much-mem", nil)
@@ -302,7 +312,7 @@ func TestSufficentCapacityWithTerminatedPodsDaemonLaunchesPod(t *testing.T) {
 }
 
 // DaemonSets should place onto nodes with sufficient free resource
-func TestSufficentCapacityNodeDaemonLaunchesPod(t *testing.T) {
+func TestSufficientCapacityNodeDaemonLaunchesPod(t *testing.T) {
 	podSpec := resourcePodSpec("not-too-much-mem", "75M", "75m")
 	manager, podControl, _ := newTestController()
 	node := newNode("not-too-much-mem", nil)
@@ -650,6 +660,31 @@ func TestObservedGeneration(t *testing.T) {
 	syncAndValidateDaemonSets(t, manager, daemon, podControl, 0, 0)
 	if updated.Status.ObservedGeneration != daemon.Generation {
 		t.Errorf("Wrong ObservedGeneration for daemon %s in status. Expected %d, got %d", updated.Name, daemon.Generation, updated.Status.ObservedGeneration)
+	}
+}
+
+// DaemonSet controller should kill all failed pods and create at most 1 pod on every node.
+func TestDaemonKillFailedPods(t *testing.T) {
+	tests := []struct {
+		numFailedPods, numNormalPods, expectedCreates, expectedDeletes int
+		test                                                           string
+	}{
+		{numFailedPods: 0, numNormalPods: 1, expectedCreates: 0, expectedDeletes: 0, test: "normal (do nothing)"},
+		{numFailedPods: 0, numNormalPods: 0, expectedCreates: 1, expectedDeletes: 0, test: "no pods (create 1)"},
+		{numFailedPods: 1, numNormalPods: 0, expectedCreates: 0, expectedDeletes: 1, test: "1 failed pod (kill 1), 0 normal pod (create 0; will create in the next sync)"},
+		{numFailedPods: 1, numNormalPods: 3, expectedCreates: 0, expectedDeletes: 3, test: "1 failed pod (kill 1), 3 normal pods (kill 2)"},
+		{numFailedPods: 2, numNormalPods: 1, expectedCreates: 0, expectedDeletes: 2, test: "2 failed pods (kill 2), 1 normal pod"},
+	}
+
+	for _, test := range tests {
+		t.Logf("test case: %s\n", test.test)
+		manager, podControl, _ := newTestController()
+		addNodes(manager.nodeStore.Store, 0, 1, nil)
+		addFailedPods(manager.podStore.Indexer, "node-0", simpleDaemonSetLabel, test.numFailedPods)
+		addPods(manager.podStore.Indexer, "node-0", simpleDaemonSetLabel, test.numNormalPods)
+		ds := newDaemonSet("foo")
+		manager.dsStore.Add(ds)
+		syncAndValidateDaemonSets(t, manager, ds, podControl, test.expectedCreates, test.expectedDeletes)
 	}
 }
 

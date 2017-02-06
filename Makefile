@@ -227,11 +227,13 @@ define TEST_E2E_NODE_HELP_INFO
 #  GUBERNATOR: For REMOTE=true only. Produce link to Gubernator to view logs.
 #	 Defaults to false.
 #  PARALLELISM: The number of gingko nodes to run.  Defaults to 8.
+#  RUNTIME: Container runtime to use (eg. docker, rkt, remote).
+#    Defaults to "docker".
 #
 # Example:
 #   make test-e2e-node FOCUS=Kubelet SKIP=container
 #   make test-e2e-node REMOTE=true DELETE_INSTANCES=true
-#   make test-e2e-node TEST_ARGS="--experimental-cgroups-per-qos=true"
+#   make test-e2e-node TEST_ARGS="--cgroups-per-qos=true"
 # Build and run tests.
 endef
 .PHONY: test-e2e-node
@@ -512,5 +514,5 @@ bazel-release:
 	@echo "$$BAZEL_BUILD_HELP_INFO"
 else
 bazel-release:
-	bazel build //build/release-tars --define "EMBED_LICENSE_TARGETS=true"
+	bazel build //build/release-tars
 endif

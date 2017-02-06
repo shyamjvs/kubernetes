@@ -29,22 +29,22 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	klabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/v1"
 	apps "k8s.io/kubernetes/pkg/apis/apps/v1beta1"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/controller/statefulset"
-	"k8s.io/kubernetes/pkg/util/intstr"
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
@@ -124,6 +124,9 @@ var _ = framework.KubeDescribe("StatefulSet", func() {
 
 			By("Verifying statefulset provides a stable hostname for each pod")
 			framework.ExpectNoError(sst.checkHostname(ss))
+
+			By("Verifying statefulset set proper service name")
+			framework.ExpectNoError(sst.checkServiceName(ss, headlessSvcName))
 
 			cmd := "echo $(hostname) > /data/hostname; sync;"
 			By("Running " + cmd + " in all stateful pods")
@@ -961,6 +964,16 @@ func (s *statefulSetTester) waitForStatus(ss *apps.StatefulSet, expectedReplicas
 	if pollErr != nil {
 		framework.Failf("Failed waiting for stateful set status.replicas updated to %d: %v", expectedReplicas, pollErr)
 	}
+}
+
+func (p *statefulSetTester) checkServiceName(ps *apps.StatefulSet, expectedServiceName string) error {
+	framework.Logf("Checking if statefulset spec.serviceName is %s", expectedServiceName)
+
+	if expectedServiceName != ps.Spec.ServiceName {
+		return fmt.Errorf("Wrong service name governing statefulset. Expected %s got %s", expectedServiceName, ps.Spec.ServiceName)
+	}
+
+	return nil
 }
 
 func deleteAllStatefulSets(c clientset.Interface, ns string) {

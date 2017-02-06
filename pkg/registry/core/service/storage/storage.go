@@ -20,10 +20,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/generic"
+	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/genericapiserver/registry/generic"
-	genericregistry "k8s.io/kubernetes/pkg/genericapiserver/registry/generic/registry"
-	"k8s.io/kubernetes/pkg/genericapiserver/registry/rest"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/core/service"
 )
 
@@ -34,6 +35,7 @@ type REST struct {
 // NewREST returns a RESTStorage object that will work against services.
 func NewREST(optsGetter generic.RESTOptionsGetter) (*REST, *StatusREST) {
 	store := &genericregistry.Store{
+		Copier:      api.Scheme,
 		NewFunc:     func() runtime.Object { return &api.Service{} },
 		NewListFunc: func() runtime.Object { return &api.ServiceList{} },
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
@@ -41,6 +43,7 @@ func NewREST(optsGetter generic.RESTOptionsGetter) (*REST, *StatusREST) {
 		},
 		PredicateFunc:     service.MatchServices,
 		QualifiedResource: api.Resource("services"),
+		WatchCacheSize:    cachesize.GetWatchCacheSizeByResource("services"),
 
 		CreateStrategy: service.Strategy,
 		UpdateStrategy: service.Strategy,

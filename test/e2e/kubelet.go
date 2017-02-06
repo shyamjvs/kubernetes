@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -209,32 +208,6 @@ func createPodUsingNfs(f *framework.Framework, c clientset.Interface, ns, nfsIP,
 	return rtnPod
 }
 
-// Deletes the passed-in pod and waits for the pod to be terminated. Resilient to the pod
-// not existing.
-func deletePodwithWait(f *framework.Framework, c clientset.Interface, pod *v1.Pod) {
-
-	if pod == nil {
-		return
-	}
-	framework.Logf("Deleting pod %v", pod.Name)
-	err := c.Core().Pods(pod.Namespace).Delete(pod.Name, nil)
-	if err != nil {
-		if apierrs.IsNotFound(err) {
-			return // assume pod was deleted already
-		}
-		Expect(err).NotTo(HaveOccurred())
-	}
-
-	// wait for pod to terminate. Expect apierr NotFound
-	err = f.WaitForPodTerminated(pod.Name, "")
-	Expect(err).To(HaveOccurred())
-	if !apierrs.IsNotFound(err) {
-		framework.Logf("Error! Expected IsNotFound error deleting pod %q, instead got: %v", pod.Name, err)
-		Expect(apierrs.IsNotFound(err)).To(BeTrue())
-	}
-	framework.Logf("Pod %v successfully deleted", pod.Name)
-}
-
 // Checks for a lingering nfs mount and/or uid directory on the pod's host. The host IP is used
 // so that this test runs in GCE, where it appears that SSH cannot resolve the hostname.
 // If expectClean is true then we expect the node to be cleaned up and thus commands like
@@ -403,7 +376,7 @@ var _ = framework.KubeDescribe("kubelet", func() {
 	})
 
 	// Delete nfs server pod after another pods accesses the mounted nfs volume.
-	framework.KubeDescribe("host cleanup with volume mounts [HostCleanup]", func() {
+	framework.KubeDescribe("host cleanup with volume mounts [HostCleanup][Flaky]", func() {
 		type hostCleanupTest struct {
 			itDescr string
 			podCmd  string
@@ -442,8 +415,8 @@ var _ = framework.KubeDescribe("kubelet", func() {
 			})
 
 			AfterEach(func() {
-				deletePodwithWait(f, c, pod)
-				deletePodwithWait(f, c, nfsServerPod)
+				deletePodWithWait(f, c, pod)
+				deletePodWithWait(f, c, nfsServerPod)
 			})
 
 			// execute It blocks from above table of tests
@@ -454,11 +427,11 @@ var _ = framework.KubeDescribe("kubelet", func() {
 					pod = createPodUsingNfs(f, c, ns, nfsIP, t.podCmd)
 
 					By("Delete the NFS server pod")
-					deletePodwithWait(f, c, nfsServerPod)
+					deletePodWithWait(f, c, nfsServerPod)
 					nfsServerPod = nil
 
 					By("Delete the pod mounted to the NFS volume")
-					deletePodwithWait(f, c, pod)
+					deletePodWithWait(f, c, pod)
 					// pod object is now stale, but is intentionally not nil
 
 					By("Check if host running deleted pod has been cleaned up -- expect not")

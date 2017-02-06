@@ -24,7 +24,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
 	federationapi "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	federationclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset"
@@ -34,7 +36,6 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	apiv1 "k8s.io/kubernetes/pkg/api/v1"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
 
 	"github.com/golang/glog"
@@ -84,7 +85,7 @@ type NamespaceController struct {
 func NewNamespaceController(client federationclientset.Interface) *NamespaceController {
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(client))
-	recorder := broadcaster.NewRecorder(apiv1.EventSource{Component: "federated-namespace-controller"})
+	recorder := broadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: "federated-namespace-controller"})
 
 	nc := &NamespaceController{
 		federatedApiClient:    client,
@@ -218,14 +219,14 @@ func (nc *NamespaceController) removeFinalizerFunc(obj runtime.Object, finalizer
 	return namespace, nil
 }
 
-// Adds the given finalizer to the given objects ObjectMeta.
+// Adds the given finalizers to the given objects ObjectMeta.
 // Assumes that the given object is a namespace.
-func (nc *NamespaceController) addFinalizerFunc(obj runtime.Object, finalizer string) (runtime.Object, error) {
+func (nc *NamespaceController) addFinalizerFunc(obj runtime.Object, finalizers []string) (runtime.Object, error) {
 	namespace := obj.(*apiv1.Namespace)
-	namespace.ObjectMeta.Finalizers = append(namespace.ObjectMeta.Finalizers, finalizer)
+	namespace.ObjectMeta.Finalizers = append(namespace.ObjectMeta.Finalizers, finalizers...)
 	namespace, err := nc.federatedApiClient.Core().Namespaces().Finalize(namespace)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add finalizer %s to namespace %s: %v", finalizer, namespace.Name, err)
+		return nil, fmt.Errorf("failed to add finalizers %v to namespace %s: %v", finalizers, namespace.Name, err)
 	}
 	return namespace, nil
 }

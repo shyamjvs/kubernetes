@@ -27,16 +27,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	core "k8s.io/client-go/testing"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/api/v1"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
+	"k8s.io/kubernetes/pkg/kubelet/server/portforward"
 	"k8s.io/kubernetes/pkg/kubelet/server/remotecommand"
 )
 
@@ -1607,7 +1608,7 @@ func TestPortForward(t *testing.T) {
 		podName                = "podFoo"
 		podNamespace           = "nsFoo"
 		podUID       types.UID = "12345678"
-		port         uint16    = 5000
+		port         int32     = 5000
 	)
 	var (
 		stream = &fakeReadWriteCloser{}
@@ -1646,7 +1647,7 @@ func TestPortForward(t *testing.T) {
 		podFullName := kubecontainer.GetPodFullName(podWithUidNameNs(podUID, tc.podName, podNamespace))
 		{ // No streaming case
 			description := "no streaming - " + tc.description
-			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID)
+			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID, portforward.V4Options{})
 			assert.Error(t, err, description)
 			assert.Nil(t, redirect, description)
 
@@ -1658,7 +1659,7 @@ func TestPortForward(t *testing.T) {
 			fakeRuntime := &containertest.FakeDirectStreamingRuntime{FakeRuntime: testKubelet.fakeRuntime}
 			kubelet.containerRuntime = fakeRuntime
 
-			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID)
+			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID, portforward.V4Options{})
 			assert.NoError(t, err, description)
 			assert.Nil(t, redirect, description)
 
@@ -1677,7 +1678,7 @@ func TestPortForward(t *testing.T) {
 			fakeRuntime := &containertest.FakeIndirectStreamingRuntime{FakeRuntime: testKubelet.fakeRuntime}
 			kubelet.containerRuntime = fakeRuntime
 
-			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID)
+			redirect, err := kubelet.GetPortForward(tc.podName, podNamespace, podUID, portforward.V4Options{})
 			if tc.expectError {
 				assert.Error(t, err, description)
 			} else {

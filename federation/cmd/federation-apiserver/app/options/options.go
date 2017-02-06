@@ -20,7 +20,8 @@ package options
 import (
 	"time"
 
-	genericoptions "k8s.io/kubernetes/pkg/genericapiserver/server/options"
+	genericoptions "k8s.io/apiserver/pkg/server/options"
+	"k8s.io/kubernetes/pkg/api"
 	kubeoptions "k8s.io/kubernetes/pkg/kubeapiserver/options"
 
 	// add the kubernetes feature gates
@@ -38,6 +39,7 @@ type ServerRunOptions struct {
 	Authentication          *kubeoptions.BuiltInAuthenticationOptions
 	Authorization           *kubeoptions.BuiltInAuthorizationOptions
 	CloudProvider           *kubeoptions.CloudProviderOptions
+	StorageSerialization    *kubeoptions.StorageSerializationOptions
 
 	EventTTL time.Duration
 }
@@ -46,15 +48,18 @@ type ServerRunOptions struct {
 func NewServerRunOptions() *ServerRunOptions {
 	s := ServerRunOptions{
 		GenericServerRunOptions: genericoptions.NewServerRunOptions(),
-		Etcd:            genericoptions.NewEtcdOptions(),
-		SecureServing:   genericoptions.NewSecureServingOptions(),
-		InsecureServing: genericoptions.NewInsecureServingOptions(),
-		Authentication:  kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),
-		Authorization:   kubeoptions.NewBuiltInAuthorizationOptions(),
-		CloudProvider:   kubeoptions.NewCloudProviderOptions(),
+		Etcd:                 genericoptions.NewEtcdOptions(api.Scheme),
+		SecureServing:        genericoptions.NewSecureServingOptions(),
+		InsecureServing:      genericoptions.NewInsecureServingOptions(),
+		Authentication:       kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),
+		Authorization:        kubeoptions.NewBuiltInAuthorizationOptions(),
+		CloudProvider:        kubeoptions.NewCloudProviderOptions(),
+		StorageSerialization: kubeoptions.NewStorageSerializationOptions(),
 
 		EventTTL: 1 * time.Hour,
 	}
+	// Overwrite the default for storage data format.
+	s.GenericServerRunOptions.DefaultStorageMediaType = "application/vnd.kubernetes.protobuf"
 	return &s
 }
 
@@ -68,6 +73,7 @@ func (s *ServerRunOptions) AddFlags(fs *pflag.FlagSet) {
 	s.Authentication.AddFlags(fs)
 	s.Authorization.AddFlags(fs)
 	s.CloudProvider.AddFlags(fs)
+	s.StorageSerialization.AddFlags(fs)
 
 	fs.DurationVar(&s.EventTTL, "event-ttl", s.EventTTL,
 		"Amount of time to retain events. Default is 1h.")

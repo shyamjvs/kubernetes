@@ -30,8 +30,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	clientv1 "k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/flowcontrol"
+	"k8s.io/client-go/util/workqueue"
 	fed "k8s.io/kubernetes/federation/apis/federation"
 	fedv1 "k8s.io/kubernetes/federation/apis/federation/v1beta1"
 	fedclientset "k8s.io/kubernetes/federation/client/clientset_generated/federation_clientset"
@@ -45,9 +48,7 @@ import (
 	extensionsv1 "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	kubeclientset "k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
 	"k8s.io/kubernetes/pkg/client/legacylisters"
-	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/util/workqueue"
 )
 
 const (
@@ -107,7 +108,7 @@ type ReplicaSetController struct {
 func NewReplicaSetController(federationClient fedclientset.Interface) *ReplicaSetController {
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(eventsink.NewFederatedEventSink(federationClient))
-	recorder := broadcaster.NewRecorder(apiv1.EventSource{Component: "federated-replicaset-controller"})
+	recorder := broadcaster.NewRecorder(api.Scheme, clientv1.EventSource{Component: "federated-replicaset-controller"})
 
 	frsc := &ReplicaSetController{
 		fedClient:           federationClient,
@@ -259,14 +260,14 @@ func (frsc *ReplicaSetController) removeFinalizerFunc(obj runtime.Object, finali
 	return replicaset, nil
 }
 
-// Adds the given finalizer to the given objects ObjectMeta.
+// Adds the given finalizers to the given objects ObjectMeta.
 // Assumes that the given object is a replicaset.
-func (frsc *ReplicaSetController) addFinalizerFunc(obj runtime.Object, finalizer string) (runtime.Object, error) {
+func (frsc *ReplicaSetController) addFinalizerFunc(obj runtime.Object, finalizers []string) (runtime.Object, error) {
 	replicaset := obj.(*extensionsv1.ReplicaSet)
-	replicaset.ObjectMeta.Finalizers = append(replicaset.ObjectMeta.Finalizers, finalizer)
+	replicaset.ObjectMeta.Finalizers = append(replicaset.ObjectMeta.Finalizers, finalizers...)
 	replicaset, err := frsc.fedClient.Extensions().ReplicaSets(replicaset.Namespace).Update(replicaset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to add finalizer %s to replicaset %s: %v", finalizer, replicaset.Name, err)
+		return nil, fmt.Errorf("failed to add finalizers %v to replicaset %s: %v", finalizers, replicaset.Name, err)
 	}
 	return replicaset, nil
 }

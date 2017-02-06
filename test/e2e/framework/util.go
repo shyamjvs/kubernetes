@@ -376,10 +376,10 @@ func SkipIfMissingResource(clientPool dynamic.ClientPool, gvr schema.GroupVersio
 }
 
 // ProvidersWithSSH are those providers where each node is accessible with SSH
-var ProvidersWithSSH = []string{"gce", "gke", "aws"}
+var ProvidersWithSSH = []string{"gce", "gke", "aws", "local"}
 
 // providersWithMasterSSH are those providers where master node is accessible with SSH
-var providersWithMasterSSH = []string{"gce", "gke", "kubemark", "aws"}
+var providersWithMasterSSH = []string{"gce", "gke", "kubemark", "aws", "local"}
 
 type podCondition func(pod *v1.Pod) (bool, error)
 
@@ -2110,8 +2110,11 @@ func (f *Framework) MatchContainerOutput(
 	containerName string,
 	expectedOutput []string,
 	matcher func(string, ...interface{}) gomegatypes.GomegaMatcher) error {
-	podClient := f.PodClient()
-	ns := f.Namespace.Name
+	ns := pod.ObjectMeta.Namespace
+	if ns == "" {
+		ns = f.Namespace.Name
+	}
+	podClient := f.PodClientNS(ns)
 
 	createdPod := podClient.Create(pod)
 	defer func() {
@@ -2517,23 +2520,6 @@ func ExpectNodeHasTaint(c clientset.Interface, nodeName string, taint v1.Taint) 
 	}
 }
 
-func deleteTaint(oldTaints []v1.Taint, taintToDelete v1.Taint) ([]v1.Taint, error) {
-	newTaints := []v1.Taint{}
-	found := false
-	for _, oldTaint := range oldTaints {
-		if oldTaint.MatchTaint(taintToDelete) {
-			found = true
-			continue
-		}
-		newTaints = append(newTaints, taintToDelete)
-	}
-
-	if !found {
-		return nil, fmt.Errorf("taint %s not found.", taintToDelete.ToString())
-	}
-	return newTaints, nil
-}
-
 // RemoveTaintOffNode is for cleaning up taints temporarily added to node,
 // won't fail if target taint doesn't exist or has been removed.
 func RemoveTaintOffNode(c clientset.Interface, nodeName string, taint v1.Taint) {
@@ -2552,8 +2538,7 @@ func RemoveTaintOffNode(c clientset.Interface, nodeName string, taint v1.Taint) 
 			return
 		}
 
-		newTaints, err := deleteTaint(nodeTaints, taint)
-		ExpectNoError(err)
+		newTaints, _ := v1.DeleteTaint(nodeTaints, &taint)
 		if len(newTaints) == 0 {
 			delete(node.Annotations, v1.TaintsAnnotationKey)
 		} else {
@@ -3075,6 +3060,36 @@ func WaitForReadyReplicaSet(c clientset.Interface, ns, name string) error {
 	return err
 }
 
+func NewDeployment(deploymentName string, replicas int32, podLabels map[string]string, imageName, image string, strategyType extensions.DeploymentStrategyType) *extensions.Deployment {
+	zero := int64(0)
+	return &extensions.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: deploymentName,
+		},
+		Spec: extensions.DeploymentSpec{
+			Replicas: func(i int32) *int32 { return &i }(replicas),
+			Selector: &metav1.LabelSelector{MatchLabels: podLabels},
+			Strategy: extensions.DeploymentStrategy{
+				Type: strategyType,
+			},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: podLabels,
+				},
+				Spec: v1.PodSpec{
+					TerminationGracePeriodSeconds: &zero,
+					Containers: []v1.Container{
+						{
+							Name:  imageName,
+							Image: image,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 // Waits for the deployment status to become valid (i.e. max unavailable and max surge aren't violated anymore).
 // Note that the status should stay valid at all times unless shortly after a scaling event or the deployment is just created.
 // To verify that the deployment status is valid and wait for the rollout to finish, use WaitForDeploymentStatus instead.
@@ -3469,7 +3484,7 @@ func logPodsOfDeployment(c clientset.Interface, deployment *extensions.Deploymen
 // Waits for the number of events on the given object to reach a desired count.
 func WaitForEvents(c clientset.Interface, ns string, objOrRef runtime.Object, desiredEventsCount int) error {
 	return wait.Poll(Poll, 5*time.Minute, func() (bool, error) {
-		events, err := c.Core().Events(ns).Search(objOrRef)
+		events, err := c.Core().Events(ns).Search(api.Scheme, objOrRef)
 		if err != nil {
 			return false, fmt.Errorf("error in listing events: %s", err)
 		}
@@ -3488,7 +3503,7 @@ func WaitForEvents(c clientset.Interface, ns string, objOrRef runtime.Object, de
 // Waits for the number of events on the given object to be at least a desired count.
 func WaitForPartialEvents(c clientset.Interface, ns string, objOrRef runtime.Object, atLeastEventsCount int) error {
 	return wait.Poll(Poll, 5*time.Minute, func() (bool, error) {
-		events, err := c.Core().Events(ns).Search(objOrRef)
+		events, err := c.Core().Events(ns).Search(api.Scheme, objOrRef)
 		if err != nil {
 			return false, fmt.Errorf("error in listing events: %s", err)
 		}
@@ -3872,6 +3887,7 @@ func GetSigner(provider string) (ssh.Signer, error) {
 	// please also add them to any SSH tests that are disabled because of signer
 	// support.
 	keyfile := ""
+	key := ""
 	switch provider {
 	case "gce", "gke", "kubemark":
 		keyfile = "google_compute_engine"
@@ -3884,15 +3900,23 @@ func GetSigner(provider string) (ssh.Signer, error) {
 		// Otherwise revert to home dir
 		keyfile = "kube_aws_rsa"
 	case "vagrant":
-		keyfile := os.Getenv("VAGRANT_SSH_KEY")
+		keyfile = os.Getenv("VAGRANT_SSH_KEY")
 		if len(keyfile) != 0 {
 			return sshutil.MakePrivateKeySignerFromFile(keyfile)
 		}
 		return nil, fmt.Errorf("VAGRANT_SSH_KEY env variable should be provided")
+	case "local":
+		keyfile = os.Getenv("LOCAL_SSH_KEY") // maybe?
+		if len(keyfile) == 0 {
+			keyfile = "id_rsa"
+		}
 	default:
 		return nil, fmt.Errorf("GetSigner(...) not implemented for %s", provider)
 	}
-	key := filepath.Join(keydir, keyfile)
+
+	if len(key) == 0 {
+		key = filepath.Join(keydir, keyfile)
+	}
 
 	return sshutil.MakePrivateKeySignerFromFile(key)
 }

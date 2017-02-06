@@ -18,9 +18,10 @@ package storage
 
 import (
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/registry/generic"
+	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/genericapiserver/registry/generic"
-	genericregistry "k8s.io/kubernetes/pkg/genericapiserver/registry/generic/registry"
+	"k8s.io/kubernetes/pkg/registry/cachesize"
 	"k8s.io/kubernetes/pkg/registry/core/limitrange"
 )
 
@@ -31,6 +32,7 @@ type REST struct {
 // NewREST returns a RESTStorage object that will work against horizontal pod autoscalers.
 func NewREST(optsGetter generic.RESTOptionsGetter) *REST {
 	store := &genericregistry.Store{
+		Copier:      api.Scheme,
 		NewFunc:     func() runtime.Object { return &api.LimitRange{} },
 		NewListFunc: func() runtime.Object { return &api.LimitRangeList{} },
 		ObjectNameFunc: func(obj runtime.Object) (string, error) {
@@ -38,6 +40,7 @@ func NewREST(optsGetter generic.RESTOptionsGetter) *REST {
 		},
 		PredicateFunc:     limitrange.MatchLimitRange,
 		QualifiedResource: api.Resource("limitranges"),
+		WatchCacheSize:    cachesize.GetWatchCacheSizeByResource("limitranges"),
 
 		CreateStrategy: limitrange.Strategy,
 		UpdateStrategy: limitrange.Strategy,
