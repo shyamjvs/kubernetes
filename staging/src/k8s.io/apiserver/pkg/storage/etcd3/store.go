@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/coreos/etcd/clientv3"
+	pb "github.com/coreos/etcd/etcdserver/etcdserverpb"
 	"github.com/golang/glog"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -241,8 +242,10 @@ func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.O
 		if err := checkPreconditions(key, preconditions, origState.obj); err != nil {
 			return err
 		}
+		cmp := clientv3.Compare(clientv3.ModRevision(key), "=", origState.rev)
+		glog.V(4).Infof("[Debuggy] revision compare result: %v %v", cmp.KeyBytes(), cmp.ValueBytes())
 		txnResp, err := s.client.KV.Txn(ctx).If(
-			clientv3.Compare(clientv3.ModRevision(key), "=", origState.rev),
+			cmp,
 		).Then(
 			clientv3.OpDelete(key),
 		).Else(
@@ -253,6 +256,7 @@ func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.O
 		}
 		if !txnResp.Succeeded {
 			getResp = (*clientv3.GetResponse)(txnResp.Responses[0].GetResponseRange())
+			glog.V(4).Infof("[Debuggy] txn response when txn failed: %v", (*pb.TxnResponse)(txnResp).String())
 			glog.V(4).Infof("deletion of %s failed because of a conflict, going to retry", key)
 			continue
 		}
