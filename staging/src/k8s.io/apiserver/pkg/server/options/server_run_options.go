@@ -63,21 +63,29 @@ type ServerRunOptions struct {
 	// If enabled, after ShutdownDelayDuration elapses, any incoming request is
 	// rejected with a 429 status code and a 'Retry-After' response.
 	ShutdownSendRetryAfter bool
+
+	// Below flags control the response size threshold after which gzip compression
+	// is performed by the server, and the gzip encoding level to use for compression.
+	// A larger encoding level gives higher compression at the cost of more CPU usage.
+	MinResponseSizeBytesForCompression int
+	ResponseGzipCompressionLevel       int
 }
 
 func NewServerRunOptions() *ServerRunOptions {
 	defaults := server.NewConfig(serializer.CodecFactory{})
 	return &ServerRunOptions{
-		MaxRequestsInFlight:         defaults.MaxRequestsInFlight,
-		MaxMutatingRequestsInFlight: defaults.MaxMutatingRequestsInFlight,
-		RequestTimeout:              defaults.RequestTimeout,
-		LivezGracePeriod:            defaults.LivezGracePeriod,
-		MinRequestTimeout:           defaults.MinRequestTimeout,
-		ShutdownDelayDuration:       defaults.ShutdownDelayDuration,
-		JSONPatchMaxCopyBytes:       defaults.JSONPatchMaxCopyBytes,
-		MaxRequestBodyBytes:         defaults.MaxRequestBodyBytes,
-		EnablePriorityAndFairness:   true,
-		ShutdownSendRetryAfter:      false,
+		MaxRequestsInFlight:                defaults.MaxRequestsInFlight,
+		MaxMutatingRequestsInFlight:        defaults.MaxMutatingRequestsInFlight,
+		RequestTimeout:                     defaults.RequestTimeout,
+		LivezGracePeriod:                   defaults.LivezGracePeriod,
+		MinRequestTimeout:                  defaults.MinRequestTimeout,
+		ShutdownDelayDuration:              defaults.ShutdownDelayDuration,
+		JSONPatchMaxCopyBytes:              defaults.JSONPatchMaxCopyBytes,
+		MaxRequestBodyBytes:                defaults.MaxRequestBodyBytes,
+		EnablePriorityAndFairness:          true,
+		ShutdownSendRetryAfter:             false,
+		MinResponseSizeBytesForCompression: defaults.MinResponseSizeBytesForCompression,
+		ResponseGzipCompressionLevel:       defaults.ResponseGzipCompressionLevel,
 	}
 }
 
@@ -97,6 +105,8 @@ func (s *ServerRunOptions) ApplyTo(c *server.Config) error {
 	c.MaxRequestBodyBytes = s.MaxRequestBodyBytes
 	c.PublicAddress = s.AdvertiseAddress
 	c.ShutdownSendRetryAfter = s.ShutdownSendRetryAfter
+	c.MinResponseSizeBytesForCompression = s.MinResponseSizeBytesForCompression
+	c.ResponseGzipCompressionLevel = s.ResponseGzipCompressionLevel
 
 	return nil
 }
@@ -156,6 +166,14 @@ func (s *ServerRunOptions) Validate() []error {
 
 	if s.MaxRequestBodyBytes < 0 {
 		errors = append(errors, fmt.Errorf("ServerRunOptions.MaxRequestBodyBytes can not be negative value"))
+	}
+
+	if s.MinResponseSizeBytesForCompression < 0 {
+		errors = append(errors, fmt.Errorf("--min-response-size-bytes-for-compression can not be negative value"))
+	}
+
+	if s.ResponseGzipCompressionLevel < 1 || s.ResponseGzipCompressionLevel > 9 {
+		errors = append(errors, fmt.Errorf("--response-gzip-encoding-level can not be less than 1 or greater than 9"))
 	}
 
 	if err := validateHSTSDirectives(s.HSTSDirectives); err != nil {
@@ -255,6 +273,16 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 		"If true the HTTP Server will continue listening until all non long running request(s) in flight have been drained, "+
 		"during this window all incoming requests will be rejected with a status code 429 and a 'Retry-After' response header, "+
 		"in addition 'Connection: close' response header is set in order to tear down the TCP connection when idle.")
+
+	fs.IntVar(&s.MinResponseSizeBytesForCompression, "min-response-size-bytes-for-compression", s.MinResponseSizeBytesForCompression, ""+
+		"Minimum size of a response in bytes for it to be gzip-compressed. A zero value means compression shouldn't be performed at all. "+
+		"Further, compression only happens if it's also accepted by the client as part of the 'Accept-Encoding' header and APIResponseCompression "+
+		"feature gate is enabled. Gzip encoding helps reduces network bandwidth at the cost of higher CPU usage and response latency.")
+
+	fs.IntVar(&s.ResponseGzipCompressionLevel, "response-gzip-encoding-level", s.ResponseGzipCompressionLevel, ""+
+		"The compression level to use for responses chosen for gzip compression. Relevant only when APIResponseCompression feature gate is enabled. "+
+		"Gzip offers a range of compression levels from 1 to 9; 1 offers the fastest compression speed but at a lower compression ratio, "+
+		"and 9 offers the highest ratio but at a lower speed. A lower default (4) is chosen as compared to gzip application's default (6) for lower CPU usage.")
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(fs)
 }

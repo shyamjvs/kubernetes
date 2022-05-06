@@ -241,6 +241,17 @@ type Config struct {
 	// rejected with a 429 status code and a 'Retry-After' response.
 	ShutdownSendRetryAfter bool
 
+	// MinResponseSizeBytesForCompression specifies minimum size of the response in bytes for it to be
+	// gzip-compressed by the apiserver. A zero value means compression shouldn't be performed at all.
+	// Further, compression only happens if it's also accepted by the client as part of the 'Accept-Encoding'
+	// header and APIResponseCompression feature gate is enabled.
+	MinResponseSizeBytesForCompression int
+
+	// ResponseGzipCompressionLevel specifies compression level to use for responses chosen for gzip
+	// compression. Relevant only when APIResponseCompression feature gate is enabled. Gzip offers a
+	// range of compression levels from 1 to 9, indicating increasing order of compression ratio.
+	ResponseGzipCompressionLevel int
+
 	//===========================================================================
 	// values below here are targets for removal
 	//===========================================================================
@@ -374,6 +385,9 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 
 		APIServerID:           id,
 		StorageVersionManager: storageversion.NewDefaultManager(),
+
+		MinResponseSizeBytesForCompression: 128 * 1024,
+		ResponseGzipCompressionLevel:       4,
 	}
 }
 
@@ -837,6 +851,9 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler = genericfilters.WithHTTPLogging(handler)
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
 		handler = genericapifilters.WithTracing(handler, c.TracerProvider)
+	}
+	if utilfeature.DefaultFeatureGate.Enabled(features.APIResponseCompression) && c.MinResponseSizeBytesForCompression > 0 {
+		handler = genericfilters.WithCompression(handler, c.MinResponseSizeBytesForCompression, c.ResponseGzipCompressionLevel)
 	}
 	handler = genericapifilters.WithLatencyTrackers(handler)
 	handler = genericapifilters.WithRequestInfo(handler, c.RequestInfoResolver)
